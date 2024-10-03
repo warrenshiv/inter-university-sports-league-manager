@@ -43,22 +43,18 @@ const UserRole = Variant({
 // Structure representing a User
 const User = Record({
   id: text,
-  principal: Principal,
+  owner: Principal,
   name: text,
   email: text,
+  address: text,
   role: UserRole,
 });
 
-// Sport and Tournament Structures
+// Sport Structure
 const SportType = Variant({
   Football: Null,
   Basketball: Null,
   Volleyball: Null,
-});
-
-const TournamentStructure = Variant({
-  RoundRobin: Null,
-  Knockout: Null,
 });
 
 // Struct representing a Team
@@ -78,6 +74,22 @@ const Match = Record({
   sportType: SportType,
   scheduledDate: text,
   result: Opt(text),
+});
+
+// Referee Struct
+const Referee = Record({
+  id: text,
+  name: text,
+  email: text,
+  matchesOfficiated: Vec(text),
+  performanceRating: nat64, // Rating from 0-10
+  totalRatings: nat64, // To calculate average rating
+});
+
+// Enum representing the structure of a Tournament
+const TournamentStructure = Variant({
+  RoundRobin: Null,
+  Knockout: Null,
 });
 
 // Struct representing a Tournament
@@ -102,6 +114,7 @@ const League = Record({
 const UserPayload = Record({
   name: text,
   email: text,
+  address: text,
   role: UserRole,
 });
 
@@ -172,16 +185,56 @@ function generateId(): text {
 export default Canister({
   // User Registration
   registerUser: update([UserPayload], Result(User, ErrorType), (payload) => {
+    // Validate the payload to ensure it is a valid object
+    if (typeof payload !== "object" || Object.keys(payload).length === 0) {
+      return Err({ NotFound: "Invalid Payload Provided!!" });
+    }
+
     const id = generateId();
     const user = {
       id: id,
-      principal: ic.caller(),
-      name: payload.name,
-      email: payload.email,
-      role: payload.role,
+      owner: ic.caller(),
+      ...payload,
     };
+
+    // Insert the user into the User Storage
     usersStorage.insert(id, user);
     return Ok(user);
+  }),
+
+  // Fetch a user by ID
+  getUser: query([text], Result(User, ErrorType), (id) => {
+    const userOpt = usersStorage.get(id);
+    if ("None" in userOpt) {
+      return Err({ NotFound: `User with id ${id} not found.` });
+    }
+    return Ok(userOpt.Some);
+  }),
+
+  // Fetch all users with error handling
+  getUsers: query([], Result(Vec(User), ErrorType), () => {
+    const users = usersStorage.values();
+
+    if (users.length === 0) {
+      return Err({ NotFound: "No users found." });
+    }
+
+    return Ok(users);
+  }),
+
+  // Fetch user by owner
+  getUserByOwner: query([], Result(User, ErrorType), () => {
+    const principal = ic.caller();
+
+    const users = usersStorage.values().filter((user) => {
+      return user.owner.toText() === principal.toText();
+    });
+
+    if (users.length === 0) {
+      return Err({ NotFound: `User with owner ${principal} not found.` });
+    }
+
+    return Ok(users[0]);
   }),
 
   // Update user info
@@ -195,30 +248,27 @@ export default Canister({
       }
       const user = {
         ...userOpt.Some,
-        name: payload.name,
-        email: payload.email,
-        role: payload.role,
+        ...payload,
       };
       usersStorage.insert(payload.id, user);
       return Ok(user);
     }
   ),
 
-  // Get all users
-  getUsers: query([], Vec(User), () => {
-    return usersStorage.values();
-  }),
-
   // Create League
   createLeague: update(
     [LeaguePayload],
     Result(League, ErrorType),
     (payload) => {
+      // Validate the payload to ensure it is a valid object
+      if (typeof payload !== "object" || Object.keys(payload).length === 0) {
+        return Err({ NotFound: "Invalid Payload Provided!!" });
+      }
+
       const id = generateId();
       const league = {
         id: id,
-        name: payload.name,
-        sportType: payload.sportType,
+        ...payload,
         tournaments: [],
         createdBy: ic.caller(),
       };
@@ -227,9 +277,24 @@ export default Canister({
     }
   ),
 
-  // Get all leagues
-  getLeagues: query([], Vec(League), () => {
-    return leaguesStorage.values();
+  // Fetch a league by ID
+  getLeague: query([text], Result(League, ErrorType), (id) => {
+    const leagueOpt = leaguesStorage.get(id);
+    if ("None" in leagueOpt) {
+      return Err({ NotFound: `League with id ${id} not found.` });
+    }
+    return Ok(leagueOpt.Some);
+  }),
+
+  // Fetch all leagues with error handling
+  getLeagues: query([], Result(Vec(League), ErrorType), () => {
+    const leagues = leaguesStorage.values();
+
+    if (leagues.length === 0) {
+      return Err({ NotFound: "No leagues found." });
+    }
+
+    return Ok(leagues);
   }),
 
   // Create Tournament
@@ -237,6 +302,11 @@ export default Canister({
     [TournamentPayload],
     Result(Tournament, ErrorType),
     (payload) => {
+      // Validate the payload to ensure it is a valid object
+      if (typeof payload !== "object" || Object.keys(payload).length === 0) {
+        return Err({ InvalidPayload: "Invalid Payload Provided!!" });
+      }
+
       const id = generateId();
       const tournament = {
         id: id,
@@ -250,13 +320,24 @@ export default Canister({
     }
   ),
 
-  // Get all tournaments
-  getTournaments: query([], Vec(Tournament), () => {
-    return tournamentsStorage.values();
+  // Get all tournaments with error handling
+  getTournaments: query([], Result(Vec(Tournament), ErrorType), () => {
+    const tournaments = tournamentsStorage.values();
+
+    if (tournaments.length === 0) {
+      return Err({ NotFound: "No tournaments found." });
+    }
+
+    return Ok(tournaments);
   }),
 
   // Create Team
   createTeam: update([TeamPayload], Result(Team, ErrorType), (payload) => {
+    // Validate the payload to ensure it is a valid object
+    if (typeof payload !== "object" || Object.keys(payload).length === 0) {
+      return Err({ InvalidPayload: "Invalid Payload Provided!!" });
+    }
+
     const id = generateId();
     const team = {
       id: id,
@@ -269,9 +350,15 @@ export default Canister({
     return Ok(team);
   }),
 
-  // Get all teams
-  getTeams: query([], Vec(Team), () => {
-    return teamsStorage.values();
+  // Get all teams with error handling
+  getTeams: query([], Result(Vec(Team), ErrorType), () => {
+    const teams = teamsStorage.values();
+
+    if (teams.length === 0) {
+      return Err({ NotFound: "No teams found." });
+    }
+
+    return Ok(teams);
   }),
 
   // Schedule Match
@@ -297,9 +384,15 @@ export default Canister({
     return Ok(match);
   }),
 
-  // Get all matches
-  getMatches: query([], Vec(Match), () => {
-    return matchesStorage.values();
+  // Get all matches with error handling
+  getMatches: query([], Result(Vec(Match), ErrorType), () => {
+    const matches = matchesStorage.values();
+
+    if (matches.length === 0) {
+      return Err({ NotFound: "No matches found." });
+    }
+
+    return Ok(matches);
   }),
 
   // Submit Match Result
