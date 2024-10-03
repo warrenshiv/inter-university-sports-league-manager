@@ -1,6 +1,7 @@
 import {
   query,
   update,
+  text,
   Record,
   StableBTreeMap,
   Variant,
@@ -14,7 +15,6 @@ import {
   Principal,
   nat64,
   Null,
-  text,
   Result,
   Canister,
 } from "azle";
@@ -29,6 +29,21 @@ const UserRole = Variant({
   LeagueOfficial: Null,
 });
 
+// Payload for registering users
+const UserPayload = Record({
+  name: text,
+  email: text,
+  role: UserRole,
+});
+
+// Payload for updating users
+const UpdateUserPayload = Record({
+  id: text,
+  name: text,
+  email: text,
+  role: UserRole,
+});
+
 // User Record
 const User = Record({
   id: text,
@@ -38,7 +53,7 @@ const User = Record({
   role: UserRole,
 });
 
-// Tournament and League Types
+// Sport and Tournament Structures
 const SportType = Variant({
   Football: Null,
   Basketball: Null,
@@ -50,12 +65,32 @@ const TournamentStructure = Variant({
   Knockout: Null,
 });
 
+// Team Payload and Record
+const TeamPayload = Record({
+  name: text,
+  coachId: text,
+  sportType: SportType,
+  playerIds: Vec(Principal),
+});
+
 const Team = Record({
   id: text,
   name: text,
   coach: Principal,
   players: Vec(Principal),
   sportType: SportType,
+});
+
+// Match Payload and Record
+const MatchPayload = Record({
+  homeTeamId: text,
+  awayTeamId: text,
+  scheduledDate: text,
+});
+
+const MatchResultPayload = Record({
+  matchId: text,
+  result: text,
 });
 
 const Match = Record({
@@ -67,11 +102,25 @@ const Match = Record({
   result: Opt(text),
 });
 
+// Tournament Payload and Record
+const TournamentPayload = Record({
+  name: text,
+  structure: TournamentStructure,
+  teamIds: Vec(text),
+  sportType: SportType,
+});
+
 const Tournament = Record({
   id: text,
   name: text,
   structure: TournamentStructure,
   teams: Vec(text),
+  sportType: SportType,
+});
+
+// League Payload and Record
+const LeaguePayload = Record({
+  name: text,
   sportType: SportType,
 });
 
@@ -81,6 +130,12 @@ const League = Record({
   tournaments: Vec(Tournament),
   sportType: SportType,
   createdBy: Principal,
+});
+
+// Error Handling
+const ErrorType = Variant({
+  NotFound: text,
+  InvalidPayload: text,
 });
 
 // Storage Maps
@@ -98,16 +153,32 @@ function generateId(): text {
 // Canister Module
 export default Canister({
   // User Registration
-  registerUser: update([text, text, UserRole], Result(User, text), (name, email, role) => {
+  registerUser: update([UserPayload], Result(User, ErrorType), (payload) => {
     const id = generateId();
     const user = {
       id: id,
       principal: ic.caller(),
-      name: name,
-      email: email,
-      role: role,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role,
     };
     usersStorage.insert(id, user);
+    return Ok(user);
+  }),
+
+  // Update user info
+  updateUser: update([UpdateUserPayload], Result(User, ErrorType), (payload) => {
+    const userOpt = usersStorage.get(payload.id);
+    if ("None" in userOpt) {
+      return Err({ NotFound: `User with id ${payload.id} not found.` });
+    }
+    const user = {
+      ...userOpt.Some,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role,
+    };
+    usersStorage.insert(payload.id, user);
     return Ok(user);
   }),
 
@@ -117,12 +188,12 @@ export default Canister({
   }),
 
   // Create League
-  createLeague: update([text, SportType], Result(League, text), (name, sportType) => {
+  createLeague: update([LeaguePayload], Result(League, ErrorType), (payload) => {
     const id = generateId();
     const league = {
       id: id,
-      name: name,
-      sportType: sportType,
+      name: payload.name,
+      sportType: payload.sportType,
       tournaments: [],
       createdBy: ic.caller(),
     };
@@ -136,14 +207,14 @@ export default Canister({
   }),
 
   // Create Tournament
-  createTournament: update([text, TournamentStructure, Vec(text), SportType], Result(Tournament, text), (name, structure, teamIds, sportType) => {
+  createTournament: update([TournamentPayload], Result(Tournament, ErrorType), (payload) => {
     const id = generateId();
     const tournament = {
       id: id,
-      name: name,
-      structure: structure,
-      teams: teamIds,
-      sportType: sportType,
+      name: payload.name,
+      structure: payload.structure,
+      teams: payload.teamIds,
+      sportType: payload.sportType,
     };
     tournamentsStorage.insert(id, tournament);
     return Ok(tournament);
@@ -155,14 +226,14 @@ export default Canister({
   }),
 
   // Create Team
-  createTeam: update([text, text, SportType, Vec(Principal)], Result(Team, text), (name, coachId, sportType, playerIds) => {
+  createTeam: update([TeamPayload], Result(Team, ErrorType), (payload) => {
     const id = generateId();
     const team = {
       id: id,
-      name: name,
+      name: payload.name,
       coach: ic.caller(),
-      players: playerIds,
-      sportType: sportType,
+      players: payload.playerIds,
+      sportType: payload.sportType,
     };
     teamsStorage.insert(id, team);
     return Ok(team);
@@ -174,65 +245,71 @@ export default Canister({
   }),
 
   // Schedule Match
-  scheduleMatch: update([text, text, text], Result(Match, text), (homeTeamId, awayTeamId, scheduledDate) => {
-    const homeTeamOpt = teamsStorage.get(homeTeamId);
-    const awayTeamOpt = teamsStorage.get(awayTeamId);
-    
+  scheduleMatch: update([MatchPayload], Result(Match, ErrorType), (payload) => {
+    const homeTeamOpt = teamsStorage.get(payload.homeTeamId);
+    const awayTeamOpt = teamsStorage.get(payload.awayTeamId);
+
     if ("None" in homeTeamOpt || "None" in awayTeamOpt) {
-      return Err("One of the teams was not found.");
+      return Err({ NotFound: "One of the teams was not found." });
     }
-    
+
     const id = generateId();
     const match = {
       id: id,
       homeTeam: homeTeamOpt.Some,
       awayTeam: awayTeamOpt.Some,
       sportType: homeTeamOpt.Some.sportType,
-      scheduledDate: scheduledDate,
+      scheduledDate: payload.scheduledDate,
       result: None,
     };
+
     matchesStorage.insert(id, match);
     return Ok(match);
   }),
 
-  // Get all matches
-  getMatches: query([], Vec(Match), () => {
-    return matchesStorage.values();
-  }),
-
-  // Submit Match Result
-  submitMatchResult: update([text, text], Result(Match, text), (matchId, result) => {
-    const matchOpt = matchesStorage.get(matchId);
-    
-    if ("None" in matchOpt) {
-      return Err("Match not found.");
-    }
-    
-    const match = matchOpt.Some;
-    const updatedMatch = {
-      ...match,
-      result: Some(result),
-    };
-    matchesStorage.insert(match.id, updatedMatch);
-    return Ok(updatedMatch);
-  }),
-
-  // Leaderboards - Aggregate points for teams based on match results
-  getLeaderboards: query([SportType], Vec(Team), (sportType) => {
-    const teams = teamsStorage.values().filter((team) => team.sportType === sportType);
-    const teamResults = new Map();
-
-    matchesStorage.values().forEach((match) => {
-      if ("Some" in match.result) {
-        const result = match.result.Some;
-        if (result === match.homeTeam.id) {
-          teamResults.set(match.homeTeam.id, (teamResults.get(match.homeTeam.id) || 0) + 3);
-        } else if (result === match.awayTeam.id) {
-          teamResults.set(match.awayTeam.id, (teamResults.get(match.awayTeam.id) || 0) + 3);
-        }
+    // Get all matches
+    getMatches: query([], Vec(Match), () => {
+      return matchesStorage.values();
+    }),
+  
+    // Submit Match Result
+    submitMatchResult: update([MatchResultPayload], Result(Match, ErrorType), (payload) => {
+      const matchOpt = matchesStorage.get(payload.matchId);
+  
+      if ("None" in matchOpt) {
+        return Err({ NotFound: `Match with id ${payload.matchId} not found.` });
       }
-    });
+  
+      const match = matchOpt.Some;
+      const updatedMatch = {
+        ...match,
+        result: Some(payload.result),
+      };
+  
+      matchesStorage.insert(match.id, updatedMatch);
+      return Ok(updatedMatch);
+    }),
+  
+    // Leaderboards - Aggregate points for teams based on match results
+    getLeaderboards: query([SportType], Vec(Team), (sportType) => {
+      const teams = teamsStorage.values().filter((team) => team.sportType === sportType);
+      const teamResults = new Map();
+  
+      matchesStorage.values().forEach((match) => {
+        if ("Some" in match.result) {
+          const result = match.result.Some;
+  
+          if (result === match.homeTeam.id) {
+            teamResults.set(match.homeTeam.id, (teamResults.get(match.homeTeam.id) || 0) + 3); // Home team wins
+          } else if (result === match.awayTeam.id) {
+            teamResults.set(match.awayTeam.id, (teamResults.get(match.awayTeam.id) || 0) + 3); // Away team wins
+          }
+        }
+      });
+  
+      // Sort teams by their points in descending order
+      return teams.sort((a, b) => (teamResults.get(b.id) || 0) - (teamResults.get(a.id) || 0));
+    }),
+  });
 
-    return teams.sort((a, b) => (teamResults.get(b.id) || 0) - (teamResults.get(a.id) || 0));
-  }),
-});
+  
