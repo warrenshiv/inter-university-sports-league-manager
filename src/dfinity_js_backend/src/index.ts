@@ -62,8 +62,8 @@ const Team = Record({
   id: text,
   name: text,
   coach: Principal,
-  players: Vec(Principal),
   sportType: SportType,
+  members: Vec(text),
 });
 
 // Struct representing a Match
@@ -131,7 +131,12 @@ const TeamPayload = Record({
   name: text,
   coachId: text,
   sportType: SportType,
-  playerIds: Vec(Principal),
+});
+
+// Payload for adding a member to a team
+const AddMemberPayload = Record({
+  teamId: text,
+  memberId: text,
 });
 
 // Match Payload
@@ -343,11 +348,58 @@ export default Canister({
       id: id,
       name: payload.name,
       coach: ic.caller(),
-      players: payload.playerIds,
       sportType: payload.sportType,
+      members: [],
     };
     teamsStorage.insert(id, team);
     return Ok(team);
+  }),
+
+  // Function to add a member to a team
+  caddMemberToTeam: update(
+    [AddMemberPayload],
+    Result(Team, ErrorType),
+    (payload) => {
+      // Fetch the team by ID
+      const teamOpt = teamsStorage.get(payload.teamId);
+
+      // Check if the team exists
+      if ("None" in teamOpt) {
+        return Err({ NotFound: `Team with id ${payload.teamId} not found.` });
+      }
+
+      // Fetch the user by ID (to ensure the member exists)
+      const userOpt = usersStorage.get(payload.memberId);
+      if ("None" in userOpt) {
+        return Err({ NotFound: `User with id ${payload.memberId} not found.` });
+      }
+
+      // Extract the team and check if the member is already part of the team
+      const team = teamOpt.Some;
+      if (team.members.includes(payload.memberId)) {
+        return Err({ InvalidPayload: "User is already a member of the team." });
+      }
+
+      // Add the member to the team's members list
+      const updatedTeam = {
+        ...team,
+        members: [...team.members, payload.memberId],
+      };
+
+      // Save the updated team back to storage
+      teamsStorage.insert(payload.teamId, updatedTeam);
+
+      return Ok(updatedTeam);
+    }
+  ),
+
+  // Get a team by ID
+  getTeam: query([text], Result(Team, ErrorType), (id) => {
+    const teamOpt = teamsStorage.get(id);
+    if ("None" in teamOpt) {
+      return Err({ NotFound: `Team with id ${id} not found.` });
+    }
+    return Ok(teamOpt.Some);
   }),
 
   // Get all teams with error handling
