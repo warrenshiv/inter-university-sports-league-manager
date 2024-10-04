@@ -61,7 +61,7 @@ const SportType = Variant({
 const Team = Record({
   id: text,
   name: text,
-  coach: Principal,
+  coach: Vec(text),
   sportType: SportType,
   members: Vec(text),
 });
@@ -129,7 +129,6 @@ const UpdateUserPayload = Record({
 // Team Payload
 const TeamPayload = Record({
   name: text,
-  coachId: text,
   sportType: SportType,
 });
 
@@ -137,6 +136,12 @@ const TeamPayload = Record({
 const AddMemberPayload = Record({
   teamId: text,
   memberId: text,
+});
+
+// Payload for Assigning a Coach to a Team
+const AssignCoachPayload = Record({
+  teamId: text,
+  coachId: text,
 });
 
 // Match Payload
@@ -347,7 +352,7 @@ export default Canister({
     const team = {
       id: id,
       name: payload.name,
-      coach: ic.caller(),
+      coach: [],
       sportType: payload.sportType,
       members: [],
     };
@@ -412,6 +417,55 @@ export default Canister({
 
     return Ok(teams);
   }),
+
+  // Function to assign a coach to a team (supports multiple coaches)
+  assignCoachToTeam: update(
+    [AssignCoachPayload],
+    Result(Team, ErrorType),
+    (payload) => {
+      // Fetch the team by ID
+      const teamOpt = teamsStorage.get(payload.teamId);
+
+      // Check if the team exists
+      if ("None" in teamOpt) {
+        return Err({ NotFound: `Team with id ${payload.teamId} not found.` });
+      }
+
+      // Fetch the coach by ID (to ensure the coach exists and is valid)
+      const coachOpt = usersStorage.get(payload.coachId);
+
+      if ("None" in coachOpt) {
+        return Err({ NotFound: `Coach with id ${payload.coachId} not found.` });
+      }
+
+      // Verify that the user is a Coach by checking their role
+      const coach = coachOpt.Some;
+      if (coach.role !== UserRole.Coach) {
+        return Err({
+          InvalidPayload: "The user is not assigned a Coach role.",
+        });
+      }
+
+      // Extract the team and check if the coach is already assigned
+      const team = teamOpt.Some;
+      if (team.coach.includes(payload.coachId)) {
+        return Err({
+          InvalidPayload: "Coach is already assigned to this team.",
+        });
+      }
+
+      // Add the coach to the team's coaches list
+      const updatedTeam = {
+        ...team,
+        coach: [...team.coach, payload.coachId],
+      };
+
+      // Save the updated team back to storage
+      teamsStorage.insert(payload.teamId, updatedTeam);
+
+      return Ok(updatedTeam);
+    }
+  ),
 
   // Schedule Match
   scheduleMatch: update([MatchPayload], Result(Match, ErrorType), (payload) => {
